@@ -33,7 +33,10 @@ Possibly the most feature-complete DSH session manager plugin out there: full se
 ```sh
 dsh plugin --profile web add 'github:dream12347/dsh-session-manager#v0.2.2'
 ```
-
+```CMD
+# CMD
+dsh plugin --profile web add github:dream12347/dsh-session-manager#v0.2.2
+```
 ### From a local directory
 
 ```sh
