@@ -30,8 +30,7 @@
 
 ### 从 GitHub
 
-```powershell
-# PowerShell
+```sh
 dsh plugin --profile web add 'github:dream12347/dsh-session-manager#v0.2.2'
 ```
 ```CMD
