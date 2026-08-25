@@ -33,9 +33,11 @@
 ```powershell
 # PowerShell
 dsh plugin --profile web add 'github:dream12347/dsh-session-manager#v0.2.2'
-:: CMD
+```
+```CMD
+# CMD
 dsh plugin --profile web add github:dream12347/dsh-session-manager#v0.2.2
-
+```
 ### 从本地目录
 
 ```sh
