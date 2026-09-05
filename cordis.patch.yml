@@ -2,4 +2,4 @@
 # resolved through the profile's node_modules.
 - insert:
     - id: dsh-session-manager
-      name: dsh-session-manager
+      name: '@lim324/dsh-session-manager'

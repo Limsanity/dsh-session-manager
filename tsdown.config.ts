@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsdown'
 
-const PACKAGE_ID = 'dsh-session-manager'
+const PACKAGE_ID = '@lim324/dsh-session-manager'
 
 export default defineConfig([
   {

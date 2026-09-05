@@ -205,6 +205,29 @@ function trashEntryTitle(
   return liveTitle ?? titles[entry.sessionId] ?? entry.sessionId
 }
 
+/**
+ * Robust row display label read from the CORRECT projection source.
+ *
+ * `SessionSummary.displayTitle` is derived by the host's `displayTitleOf(title,
+ * cwd, id)`, which returns the DURABLE title as-is when present — and returns ""
+ * when that durable title is an empty string (it does NOT fall through to the
+ * auto-generated title or the id). The real, auto-generated title lives on the
+ * `dsh-session-title` projection (`key: "title"`), which rides along on
+ * `session.projectionValues`. So read that first, then fall back to the stable
+ * `displayTitle`, then the cwd basename, then the session id.
+ */
+function rowDisplayTitle(session: SessionSummary): string {
+  const projected = session.projectionValues?.title
+  if (typeof projected === 'string' && projected.trim() !== '') return projected
+  if (session.title && session.title.trim() !== '') return session.title
+  if (session.displayTitle && session.displayTitle.trim() !== '') return session.displayTitle
+  if (session.cwd) {
+    const base = session.cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
+    if (base !== '') return base
+  }
+  return session.id
+}
+
 const STYLE = `
 [data-dsh-delete-session] {
   display: flex;
@@ -1746,7 +1769,7 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
     const isRunning = session.running
     const busy = busyId === session.id
     const protectedReason = isCurrent ? strings.current : isRunning ? strings.running : ''
-    const metaParts = [session.cwd ?? strings.noCwd]
+    const metaParts = [session.cwd ?? strings.noCwd, session.agentPreset].filter((part): part is string => !!part)
     if (isArchived) metaParts.push(strings.archived)
     if (protectedReason !== '' && !isCurrent) metaParts.push(protectedReason)
     const statsOpen = statsId === session.id
@@ -1768,8 +1791,8 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
         onChange: () => toggleSelected(session.id),
       }),
       createElement('div', { className: 'dsh-delete-session__row-main' },
-        createElement('div', { className: 'dsh-delete-session__row-title', title: session.displayTitle },
-          createElement('span', { className: 'dsh-delete-session__row-title-text' }, session.displayTitle),
+        createElement('div', { className: 'dsh-delete-session__row-title', title: rowDisplayTitle(session) },
+          createElement('span', { className: 'dsh-delete-session__row-title-text' }, rowDisplayTitle(session)),
           (() => {
             const dotStatus = rowStatusDot(session, unread.has(session.id))
             return renderStatusDot(
