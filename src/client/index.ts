@@ -277,6 +277,16 @@ const STYLE = `
   margin-top: 10px;
   padding-top: 8px;
 }
+.dsh-delete-session__group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dsh-delete-session__group-header .dsh-delete-session__group-action[disabled] {
+  opacity: .5;
+  cursor: default;
+}
 .dsh-delete-session__group-toggle {
   align-items: center;
   background: transparent;
@@ -950,6 +960,10 @@ function stringsOf() {
         archived: '已归档',
         archivedGroup: '已归档会话',
         archivedHint: '已归档会话删除后移入回收站；这里只是归档状态（侧边栏隐藏）。',
+        deleteAllArchived: '删除全部已归档',
+        deleteAllArchivedConfirm: '确定删除全部已归档会话（{count} 个）吗？它们会移入回收站，可在「回收站」中恢复或彻底删除。',
+        deleteAllArchivedDone: '已删除全部已归档会话（{count} 个）',
+        deleteAllArchivedFailed: '删除已归档会话失败（{count} 个未删除）',
         trashGroup: '回收站',
         trashHint: '保留最近 {limit} 条已删除会话，超出后最早的一条会被自动彻底删除。',
         trashEmpty: '回收站为空。',
@@ -1042,6 +1056,10 @@ function stringsOf() {
         archived: 'archived',
         archivedGroup: 'Archived sessions',
         archivedHint: 'Deleting an archived session moves it to the trash; this list is just the archived (sidebar-hidden) state.',
+        deleteAllArchived: 'Delete all archived',
+        deleteAllArchivedConfirm: 'Delete all {count} archived session(s)? They move to the trash, where you can restore or permanently delete them.',
+        deleteAllArchivedDone: 'Deleted {count} archived session(s)',
+        deleteAllArchivedFailed: 'Failed to delete archived session(s) ({count} left):',
         trashGroup: 'Trash',
         trashHint: 'Keeps the most recent {limit} deleted sessions; the oldest one is purged automatically when the limit is exceeded.',
         trashEmpty: 'The trash is empty.',
@@ -1131,6 +1149,7 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
   const [trashLimit, setTrashLimit] = useState(10)
   const [trashFailed, setTrashFailed] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [deleteArchivedBusy, setDeleteArchivedBusy] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [statsId, setStatsId] = useState<string | null>(null)
   const [stats, setStats] = useState<StatsState | null>(null)
@@ -1453,6 +1472,39 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
       setBusyId(null)
     }
   }, [strings, loadTrash, showNotice, sessions])
+
+  const handleDeleteArchived = useCallback(async (): Promise<void> => {
+    const deletable = archivedRows.filter((session) => !session.running)
+    if (deletable.length === 0) return
+    if (!window.confirm(strings.deleteAllArchivedConfirm.replace('{count}', String(deletable.length)))) return
+    setDeleteArchivedBusy(true)
+    setNotice(null)
+    let success = 0
+    let failed = 0
+    try {
+      for (const session of deletable) {
+        try {
+          saveTitle(session.id, session.displayTitle)
+          const response = await fetch(DELETE_ROUTE, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ sessionId: session.id }),
+          })
+          const data = (await response.json().catch(() => ({}))) as ActionResultResponse
+          if (!response.ok || data.ok !== true) throw new Error(data.error ?? `HTTP ${response.status}`)
+          success++
+        } catch {
+          failed++
+        }
+      }
+      await loadTrash()
+      if (failed === 0) showNotice({ kind: 'ok', text: strings.deleteAllArchivedDone.replace('{count}', String(success)) })
+      else showNotice({ kind: 'error', text: strings.deleteAllArchivedFailed.replace('{count}', String(failed)) })
+      void (sessions as unknown as { refresh?: () => Promise<unknown> }).refresh?.()
+    } finally {
+      setDeleteArchivedBusy(false)
+    }
+  }, [archivedRows, strings, loadTrash, showNotice, sessions])
 
   const toggleSelected = useCallback((sessionId: string): void => {
     setSelectedIds((previous) => {
@@ -1971,18 +2023,26 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
       ? createElement('div', { className: 'dsh-delete-session__empty' }, strings.empty)
       : activeGroups.map((group, index) => renderWorkspaceGroup(group, index)),
     archivedRows.length > 0 && createElement('div', { className: 'dsh-delete-session__group' },
-      createElement('button', {
-        type: 'button',
-        className: 'dsh-delete-session__group-toggle',
-        onClick: () => setArchivedOpen((open) => !open),
-        'aria-expanded': archivedOpen || undefined,
-      },
-        createElement('span', { className: 'dsh-delete-session__group-toggle-label' },
-          `${strings.archivedGroup} (${archivedRows.length})`,
+      createElement('div', { className: 'dsh-delete-session__group-header' },
+        createElement('button', {
+          type: 'button',
+          className: 'dsh-delete-session__group-toggle',
+          onClick: () => setArchivedOpen((open) => !open),
+          'aria-expanded': archivedOpen || undefined,
+        },
+          createElement('span', { className: 'dsh-delete-session__group-toggle-label' },
+            `${strings.archivedGroup} (${archivedRows.length})`,
+          ),
+          createElement('span', { className: 'dsh-delete-session__group-toggle-chevron' },
+            archivedOpen ? strings.collapse : strings.expand,
+          ),
         ),
-        createElement('span', { className: 'dsh-delete-session__group-toggle-chevron' },
-          archivedOpen ? strings.collapse : strings.expand,
-        ),
+        createElement('button', {
+          type: 'button',
+          className: 'dsh-delete-session__group-action dsh-delete-session__group-action--danger',
+          disabled: deleteArchivedBusy,
+          onClick: () => void handleDeleteArchived(),
+        }, strings.deleteAllArchived),
       ),
       archivedOpen && createElement('ul', { className: 'dsh-delete-session__list' },
         ...archivedRows.map((session) => renderRow(session, true)),
@@ -2508,6 +2568,7 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [trashOpen, setTrashOpen] = useState(state.view === 'trash')
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [deleteArchivedBusy, setDeleteArchivedBusy] = useState(false)
   const [statsId, setStatsId] = useState<string | null>(null)
   const [stats, setStats] = useState<StatsState | null>(null)
   const unread = useUnread()
@@ -2646,6 +2707,34 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
       // Best-effort; the next list refresh re-baselines anyway.
     }
   }, [strings, postAction, load, refreshTrash, sessions])
+
+  const handleDeleteArchived = useCallback(async (): Promise<void> => {
+    const trashIds = new Set((trash ?? []).map((entry) => entry.sessionId))
+    const deletable = (rows ?? []).filter((row) => row.archived && !trashIds.has(row.sessionId) && !row.running)
+    if (deletable.length === 0) return
+    if (!window.confirm(strings.deleteAllArchivedConfirm.replace('{count}', String(deletable.length)))) return
+    setDeleteArchivedBusy(true)
+    let success = 0
+    let failed = 0
+    try {
+      for (const row of deletable) {
+        saveTitle(row.sessionId, row.title)
+        const error = await postAction(DELETE_ROUTE, row.sessionId).catch(() => 'error')
+        if (error === null) success++
+        else failed++
+      }
+      await Promise.all([load(), refreshTrash()])
+      try {
+        await (sessions as { refresh?: () => Promise<unknown> }).refresh?.()
+      } catch {
+        // Best-effort; the next list refresh re-baselines anyway.
+      }
+      if (failed === 0) showAlert(strings.deleteAllArchivedDone.replace('{count}', String(success)))
+      else showAlert(strings.deleteAllArchivedFailed.replace('{count}', String(failed)))
+    } finally {
+      setDeleteArchivedBusy(false)
+    }
+  }, [rows, trash, strings, postAction, load, refreshTrash, sessions])
 
   const handleRestore = useCallback(async (sessionId: string, title: string): Promise<void> => {
     if (!window.confirm(strings.restoreConfirm.replace('{title}', title))) return
@@ -3254,18 +3343,26 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
           ? createElement('div', { className: 'dsh-delete-session__empty' }, strings.empty)
           : activeGroups.map((group, index) => renderWorkspaceGroup(group, index)),
         archivedRows.length > 0 && createElement('div', { className: 'dsh-delete-session__group' },
-          createElement('button', {
-            type: 'button',
-            className: 'dsh-delete-session__group-toggle',
-            onClick: () => setArchivedOpen((open) => !open),
-            'aria-expanded': archivedOpen || undefined,
-          },
-            createElement('span', { className: 'dsh-delete-session__group-toggle-label' },
-              `${strings.archivedGroup} (${archivedRows.length})`,
+          createElement('div', { className: 'dsh-delete-session__group-header' },
+            createElement('button', {
+              type: 'button',
+              className: 'dsh-delete-session__group-toggle',
+              onClick: () => setArchivedOpen((open) => !open),
+              'aria-expanded': archivedOpen || undefined,
+            },
+              createElement('span', { className: 'dsh-delete-session__group-toggle-label' },
+                `${strings.archivedGroup} (${archivedRows.length})`,
+              ),
+              createElement('span', { className: 'dsh-delete-session__group-toggle-chevron' },
+                archivedOpen ? strings.collapse : strings.expand,
+              ),
             ),
-            createElement('span', { className: 'dsh-delete-session__group-toggle-chevron' },
-              archivedOpen ? strings.collapse : strings.expand,
-            ),
+            createElement('button', {
+              type: 'button',
+              className: 'dsh-delete-session__group-action dsh-delete-session__group-action--danger',
+              disabled: deleteArchivedBusy,
+              onClick: () => void handleDeleteArchived(),
+            }, strings.deleteAllArchived),
           ),
           archivedOpen && createElement('ul', { className: 'dsh-delete-session__list' },
             ...archivedRows.map((row) => renderRow(row)),

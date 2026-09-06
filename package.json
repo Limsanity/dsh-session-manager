@@ -1,6 +1,6 @@
 {
   "name": "@lim324/dsh-session-manager",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Full session management for the DSH web UI: delete (with trash/restore/purge), restore archived sessions, activity stats, continue/pause, fork to a new chat, unread markers, and open log folders. Plus a global context compaction threshold. No harness changes.",
   "type": "module",
   "main": "lib/index.js",
