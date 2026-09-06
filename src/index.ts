@@ -66,7 +66,11 @@ const MAX_BODY_BYTES = 64 * 1024
 // `SessionId(randomUUID())`). Accept all three; keep the charset tight
 // (hex + dashes only, plus the literal "session-" prefix) because the id
 // is joined into a trash path.
-const SESSION_ID_RE = /^(session-)?[0-9a-fA-F-]+$/
+// Session id guard. Standard DSH ids are `session-<uuid>` (or bare `<uuid>`),
+// but the dsh-surface plugin (and similar) mint composite ids of the form
+// `session-<uuid>-surface-<uuid>`. The optional `-surface-<uuid>` tail is the
+// only literal-letter segment seen in the wild; everything else stays hex+'-'.
+const SESSION_ID_RE = /^(session-)?[0-9a-fA-F-]+(?:-surface-[0-9a-fA-F-]+)?$/
 /** Maximum trash entries kept; the oldest overflow is purged automatically. */
 export const TRASH_LIMIT = 10
 

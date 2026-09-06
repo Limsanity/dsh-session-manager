@@ -559,13 +559,14 @@ const STYLE = `
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
   border: 1px solid var(--dsw-alias-line-border, rgba(127, 127, 127, .18));
   border-radius: 10px;
   padding: 8px 10px;
 }
 .dsh-delete-session__row-main {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 220px;
+  min-width: 160px;
 }
 .dsh-delete-session__row-title {
   display: flex;
@@ -576,8 +577,8 @@ const STYLE = `
   line-height: 1.4;
 }
 .dsh-delete-session__row-title-text {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 3em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
