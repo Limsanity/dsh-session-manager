@@ -130,8 +130,30 @@ dsh plugin --profile web add /absolute/path/to/dsh-session-manager-0.2.2.tgz
 ## 开发
 
 ```sh
-pnpm install        # 安装依赖（@deepseek-ai 系列为 link 本地开发依赖）
-pnpm run check      # typecheck + test + build
+pnpm install                  # 仅依赖变化时
+./scripts/link-dev-deps.sh    # pnpm install 之后必跑：把 @deepseek-ai + zod/js-yaml 刷成宿主拷贝
+pnpm run check                # typecheck + test + build（tsdown + tsc）
 ```
 
+改动 `src/` 后需重新构建并把 `lib/` 一起提交。改完重启 `dsh web` 生效。
+
+> **`autoInstallPeers` 要用 `pnpm-workspace.yaml`**：`@deepseek-ai` 系列在 npm 上全是预发布版（`0.1.x-rc` / `alpha`），若让 pnpm 自动安装 peer，会因为传递依赖的 `>=0.1.1` 范围不含预发布版而断链。本项目已在 `pnpm-workspace.yaml` 设 `autoInstallPeers: false`。注意 `.npmrc` 的驼峰写法 `autoInstallPeers` pnpm 11 不识别，必须在 `pnpm-workspace.yaml` 里配。
+>
+> **`zod` 的坑**：每次 `pnpm install` 后 `zod` 会变回 registry 版（`4.x`），与宿主 `dsh-storage-domain` 用的宿主 `zod` 类型不一致，会让 `tsc` 在处理 `defineDomain` 的 schema 时内存溢出（OOM）。`link-dev-deps.sh` 会把 `node_modules/zod` 软链回宿主拷贝（`$DSH_HOME/profiles/node_modules/zod`）解决。因此每次 `pnpm install` 后都要跑一次 `link-dev-deps.sh`。
+>
+> **link 方式**：`dsh plugin --profile web add /绝对路径/到/dsh-session-manager` 把插件以**符号链接**装进 profile。link 插件宿主的 `import '@deepseek-ai/dsh-*'` 无法靠 Node 父目录上溯到 DSH 的平铺回退目录，所以必须靠 `link-dev-deps.sh` 把宿主 `@deepseek-ai` 软链进本仓库的 `node_modules`。
+
 `lib/` 为提交的构建产物，修改源码后必须重新构建并提交 `lib/`。
+
+## 发版
+
+```sh
+# 1) bump 版本（按 semver 定，如 0.3.0 → 0.3.1）
+# 2) 提交并推送
+git add -A && git commit -m "chore: bump to <version>" && git push origin main
+# 3) 发布（scoped 包必须 --access public）
+npm publish --access public
+```
+
+> - `main` 分支远端为 `origin`（`github.com/Limsanity/dsh-session-manager`）；上游原仓库保留为 `upstream`（`dream12347/dsh-session-manager`），用 `git fetch upstream` 拉取更新后 `git merge upstream/main`。
+> - `lib/` 是提交的构建产物，发布包直接包含最新构建，安装方无需本地重建。

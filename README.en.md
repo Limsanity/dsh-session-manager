@@ -129,8 +129,30 @@ Current version targets DSH `0.1.1-rc.1` (depends on the `settings.section` / `s
 ## Development
 
 ```sh
-pnpm install        # installs dependencies (@deepseek-ai packages are linked local dev dependencies)
-pnpm run check      # typecheck + test + build
+pnpm install                  # only when dependencies change
+./scripts/link-dev-deps.sh    # must run after pnpm install: re-link host copies of @deepseek-ai + zod/js-yaml
+pnpm run check                # typecheck + test + build (tsdown + tsc)
 ```
 
+After editing `src/`, rebuild and commit `lib/` together. Restart `dsh web` for changes to take effect.
+
+> **`autoInstallPeers` must go in `pnpm-workspace.yaml`**: the `@deepseek-ai` packages are all published as prereleases (`0.1.x-rc` / `alpha`). Auto-installing peers breaks because their transitive `>=0.1.1` ranges exclude prereleases. This repo sets `autoInstallPeers: false` in `pnpm-workspace.yaml`. Note the camelCase `.npmrc` key (`autoInstallPeers`) is NOT honored by pnpm 11 — it must be set in `pnpm-workspace.yaml`.
+>
+> **The `zod` gotcha**: after each `pnpm install`, `zod` reverts to the registry build (`4.x`), which is type-incompatible with the host `zod` that `dsh-storage-domain` uses, and `tsc` OOMs on the `defineDomain` schema. `link-dev-deps.sh` symlinks `node_modules/zod` back to the host copy (`$DSH_HOME/profiles/node_modules/zod`) to fix it. So re-run `link-dev-deps.sh` after every `pnpm install`.
+>
+> **Links**: `dsh plugin --profile web add /abs/path/to/dsh-session-manager` installs the plugin as a symlink. A link-installed host `import '@deepseek-ai/dsh-*'` cannot reach DSH's flat fallback via Node's parent walk, so `link-dev-deps.sh` must symlink the host `@deepseek-ai` into this repo's `node_modules`.
+
 `lib/` holds the committed build artifacts: rebuild and commit `lib/` with every source change.
+
+## Release
+
+```sh
+# 1) bump the version (per semver, e.g. 0.3.0 -> 0.3.1)
+# 2) commit and push
+git add -A && git commit -m "chore: bump to <version>" && git push origin main
+# 3) publish (scoped packages need --access public)
+npm publish --access public
+```
+
+> - `main` tracks `origin` (`github.com/Limsanity/dsh-session-manager`); the upstream original repo is kept as `upstream` (`dream12347/dsh-session-manager`) — pull updates with `git fetch upstream` then `git merge upstream/main`.
+> - `lib/` is committed build output, so the published tarball already contains the latest build; installers need no local rebuild.
