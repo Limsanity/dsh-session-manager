@@ -28,27 +28,21 @@ Possibly the most feature-complete DSH session manager plugin out there: full se
 
 ## Install
 
-### From GitHub
+### From npm (recommended)
 
 ```sh
-dsh plugin --profile web add 'github:dream12347/dsh-session-manager#v0.2.2'
+dsh plugin --profile web add @lim324/dsh-session-manager
+# pin a version
+dsh plugin --profile web add @lim324/dsh-session-manager@0.3.0
 ```
-```CMD
-# CMD
-dsh plugin --profile web add github:dream12347/dsh-session-manager#v0.2.2
-```
-### From a local directory
+
+### From a local directory (link, for development)
 
 ```sh
 dsh plugin --profile web add /absolute/path/to/dsh-session-manager
 ```
 
-### From a tarball
-
-```sh
-pnpm pack
-dsh plugin --profile web add /absolute/path/to/dsh-session-manager-0.2.2.tgz
-```
+> A local link install needs this checkout to resolve the host `@deepseek-ai` first (see Development: run `./scripts/link-dev-deps.sh` before adding).
 
 After installing, **restart** `dsh web` (the host plugin and the served client bundle load at startup).
 

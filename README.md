@@ -28,27 +28,21 @@
 
 ## 安装
 
-### 从 GitHub
+### 从 npm（推荐）
 
 ```sh
-dsh plugin --profile web add 'github:dream12347/dsh-session-manager#v0.2.2'
+dsh plugin --profile web add @lim324/dsh-session-manager
+# 锁定版本
+dsh plugin --profile web add @lim324/dsh-session-manager@0.3.0
 ```
-```CMD
-# CMD
-dsh plugin --profile web add github:dream12347/dsh-session-manager#v0.2.2
-```
-### 从本地目录
+
+### 从本地目录（link，开发用）
 
 ```sh
-dsh plugin --profile web add /absolute/path/to/dsh-session-manager
+dsh plugin --profile web add /绝对路径/到/dsh-session-manager
 ```
 
-### 从 tarball
-
-```sh
-pnpm pack
-dsh plugin --profile web add /absolute/path/to/dsh-session-manager-0.2.2.tgz
-```
+> 本地 link 安装需先让本仓库能解析宿主 `@deepseek-ai`（见「开发」：先执行 `./scripts/link-dev-deps.sh`）。
 
 安装完成后**重启** `dsh web`（host 插件与客户端 bundle 需要重启加载）。
 
