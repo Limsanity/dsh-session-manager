@@ -44,7 +44,6 @@ import { z } from 'zod'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 
 export const name = 'dsh-session-manager'
@@ -74,26 +73,6 @@ const SESSION_ID_RE = /^(session-)?[0-9a-fA-F-]+(?:-surface-[0-9a-fA-F-]+)?$/
 /** Maximum trash entries kept; the oldest overflow is purged automatically. */
 export const TRASH_LIMIT = 10
 
-export function openFolderCommand(platform: NodeJS.Platform): string {
-  if (platform === 'win32') return 'explorer'
-  if (platform === 'darwin') return 'open'
-  return 'xdg-open'
-}
-
-function openFolder(path: string, platform: NodeJS.Platform = process.platform): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(openFolderCommand(platform), [path], {
-      detached: true,
-      stdio: 'ignore',
-    })
-    child.once('error', reject)
-    child.once('spawn', () => {
-      child.unref()
-      resolve()
-    })
-  })
-}
-
 const trashEntrySchema = z.object({
   sessionId: z.string(),
   cwd: z.string().optional(),
@@ -122,6 +101,78 @@ function trashRoot(): string {
 }
 function trashSessionDir(sessionId: string): string {
   return join(trashRoot(), sessionId)
+}
+
+/**
+ * Mirror of the JSONL backend's per-segment escaping: anything outside
+ * `[A-Za-z0-9._-]` becomes `~XXXX` (uppercase hex of the UTF-16 code unit).
+ * @param raw - the id to encode.
+ * @returns the encoded path segment.
+ */
+export function encodeSegment(raw: string): string {
+  if (raw.length === 0) throw new Error('cannot encode an empty path segment')
+  if (raw === '.') return '~002E'
+  if (raw === '..') return '~002E~002E'
+  let out = ''
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i)
+    const ch = String.fromCharCode(code)
+    out += ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)
+      ? ch
+      : '~' + code.toString(16).toUpperCase().padStart(4, '0')
+  }
+  return out
+}
+
+/**
+ * Mirror of the JSONL backend's project-directory key for one working
+ * directory: separators collapse to single `-`, anything else outside
+ * `[A-Za-z0-9._-]` escapes to `~XXXX`, wrapped in `--…--` and length-capped.
+ * @param cwd - the session's working directory.
+ * @returns the project directory basename.
+ */
+export function projectKey(cwd: string): string {
+  if (cwd.length === 0) throw new Error('cannot encode an empty project path')
+  let readable = ''
+  let separatorRun = false
+  for (let i = 0; i < cwd.length; i++) {
+    const code = cwd.charCodeAt(i)
+    const ch = String.fromCharCode(code)
+    if (ch === '/' || ch === '\\' || ch === ':') {
+      if (!separatorRun) readable += '-'
+      separatorRun = true
+    } else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) {
+      readable += ch
+      separatorRun = false
+    } else {
+      readable += '~' + code.toString(16).toUpperCase().padStart(4, '0')
+      separatorRun = false
+    }
+  }
+  const slug = readable.replace(/^-+/, '') || 'root'
+  return `--${slug.slice(0, 251)}--`
+}
+
+/**
+ * The directory holding one stored session's log, derived exactly the way the
+ * JSONL persistence backend names it: `<root>/<projectKey(cwd)>/<encodeSegment(id)>`,
+ * with `root` defaulting to `$DSH_HOME/sessions` and `_no-cwd` standing in for a
+ * session without a working directory.
+ *
+ * `SessionPersistence.locate()` used to answer this, but 0.1.5-rc.1 removed it:
+ * the seam is handle-based and deliberately carries no consumer-facing path
+ * query (upstream note "Persistence export() and pre-release read-path trims" —
+ * all three of its consumers were only functional with compression disabled).
+ * The trash feature still needs the session DIRECTORY to move a log aside, so
+ * this mirrors the backend's naming instead. It is a pure function of
+ * (id, cwd); a change to the backend's layout needs this to follow.
+ * @param sessionId - the stored session's id.
+ * @param cwd - the session's working directory from its header, when it has one.
+ * @returns the absolute session directory.
+ */
+export function sessionLogDir(sessionId: string, cwd: string | undefined): string {
+  const root = dshHomePath('sessions')
+  return join(root, cwd === undefined ? '_no-cwd' : projectKey(cwd), encodeSegment(sessionId))
 }
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -321,8 +372,8 @@ async function applyThresholdToLiveAgents(ctx: Context, ratio: number): Promise<
       | { serviceFor?(agent: { ctx: Context }, name: string): unknown }
       | undefined
     if (presets?.serviceFor === undefined) return
-    const headers = await ctx.sessionPersistence.list()
-    for (const header of headers) {
+    const snapshots = await ctx.sessionPersistence.list()
+    for (const { header } of snapshots) {
       const agent = ctx.agents.get(header.id)
       if (agent === undefined) continue
       const engine = presets.serviceFor(agent, 'compaction') as
@@ -410,8 +461,8 @@ export function apply(ctx: Context): Promise<() => Promise<void>> {
 
         try {
           await withMutationLock(async () => {
-            const headers = await ctx.sessionPersistence.list()
-            const meta = headers.find((header) => header.id === id)
+            const snapshots = await ctx.sessionPersistence.list()
+            const meta = snapshots.find((snapshot) => snapshot.header.id === id)?.header
             const agent = ctx.agents.get(id)
             const live = agent !== undefined
 
@@ -420,14 +471,13 @@ export function apply(ctx: Context): Promise<() => Promise<void>> {
               return
             }
 
+            // The log directory is derived from the header's cwd (0.1.5-rc.1 no
+            // longer answers `locate()`); a session that was never materialized
+            // simply has no directory to move, which the callers already guard.
             let originalPath: string | undefined
             if (meta !== undefined) {
-              const location = ctx.sessionPersistence.locate(meta)
-              if (location === undefined) {
-                respond(res, 500, { ok: false, error: 'no-artifact-location' })
-                return
-              }
-              originalPath = dirname(location.path)
+              const dir = sessionLogDir(id, meta.cwd)
+              if (existsSync(dir)) originalPath = dir
             }
 
             const workspace = ctx.storageDomain.get('workspace')
@@ -534,8 +584,8 @@ export function apply(ctx: Context): Promise<() => Promise<void>> {
             // No trash entry: this is an archived-but-present session being
             // restored from the "已归档" group. Just un-archive it.
             if (entry === undefined) {
-              const headers = await ctx.sessionPersistence.list()
-              const meta = headers.find((header) => header.id === id)
+              const snapshots = await ctx.sessionPersistence.list()
+              const meta = snapshots.find((snapshot) => snapshot.header.id === id)?.header
               const agent = ctx.agents.get(id)
               if (meta === undefined && agent === undefined) {
                 return respond(res, 404, { ok: false, error: 'trash-entry-not-found' })
@@ -720,48 +770,14 @@ export function apply(ctx: Context): Promise<() => Promise<void>> {
       },
     })
 
-    // POST /dsh-session-manager/open-folder — reveal a session's log directory
-    // in the system file manager.
-    ctx.webServer.register({
-      kind: 'exact',
-      path: `${ROUTE_PREFIX}/open-folder`,
-      handler: async (req, res) => {
-        if (req.method !== 'POST') return respond(res, 405, { ok: false, error: 'method-not-allowed' })
-        let body: unknown
-        try {
-          body = await readJsonBody(req)
-        } catch {
-          return respond(res, 400, { ok: false, error: 'bad-request' })
-        }
-        const id = parseSessionId(body)
-        if (id === undefined) return respond(res, 400, { ok: false, error: 'invalid-session-id' })
-
-        try {
-          // Prefer the live artifact location; fall back to the trash entry.
-          let dir: string | undefined
-          const headers = await ctx.sessionPersistence.list()
-          const meta = headers.find((header) => header.id === id)
-          if (meta !== undefined) {
-            const location = ctx.sessionPersistence.locate(meta)
-            if (location !== undefined) dir = dirname(location.path)
-          }
-          if (dir === undefined || !existsSync(dir)) {
-            const entry = getEntries().find((candidate) => candidate.sessionId === id)
-            if (entry?.originalPath !== undefined && existsSync(entry.originalPath)) {
-              dir = entry.originalPath
-            }
-          }
-          if (dir === undefined || !existsSync(dir)) {
-            return respond(res, 404, { ok: false, error: 'folder-not-found' })
-          }
-          await openFolder(dir)
-          respond(res, 200, { ok: true })
-        } catch (error) {
-          ctx.logger.warn('[dsh-session-manager] open-folder failed:', error)
-          respond(res, 500, { ok: false, error: 'open-folder-failed' })
-        }
-      },
-    })
+    // The former POST /dsh-session-manager/open-folder route ("reveal a
+    // session's log directory in the system file manager") was removed with
+    // this plugin's 0.1.5-rc.1 adaptation: it relied on
+    // `SessionPersistence.locate()`, which that release deleted because every
+    // one of its consumers was only functional with compression disabled — the
+    // default `.jsonl.zstd` artifact cannot be read by a file manager or a
+    // shell anyway. Upstream removed its own equivalents (`DSH_SESSION_JSONL`,
+    // the hook bridges' `transcript_path`) for the same reason.
 
     return () => trash.close()
   })

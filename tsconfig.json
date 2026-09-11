@@ -21,7 +21,8 @@
     "forceConsistentCasingInFileNames": true,
     "types": [
       "node"
-    ]
+    ],
+    "preserveSymlinks": true
   },
   "include": [
     "src"

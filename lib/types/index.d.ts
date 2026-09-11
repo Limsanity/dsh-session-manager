@@ -31,7 +31,6 @@ export declare const name = "dsh-session-manager";
 export declare const inject: string[];
 /** Maximum trash entries kept; the oldest overflow is purged automatically. */
 export declare const TRASH_LIMIT = 10;
-export declare function openFolderCommand(platform: NodeJS.Platform): string;
 declare const trashEntrySchema: z.ZodObject<{
     sessionId: z.ZodString;
     cwd: z.ZodOptional<z.ZodString>;
@@ -39,6 +38,39 @@ declare const trashEntrySchema: z.ZodObject<{
     deletedAt: z.ZodNumber;
 }, z.core.$strip>;
 export type TrashEntry = z.infer<typeof trashEntrySchema>;
+/**
+ * Mirror of the JSONL backend's per-segment escaping: anything outside
+ * `[A-Za-z0-9._-]` becomes `~XXXX` (uppercase hex of the UTF-16 code unit).
+ * @param raw - the id to encode.
+ * @returns the encoded path segment.
+ */
+export declare function encodeSegment(raw: string): string;
+/**
+ * Mirror of the JSONL backend's project-directory key for one working
+ * directory: separators collapse to single `-`, anything else outside
+ * `[A-Za-z0-9._-]` escapes to `~XXXX`, wrapped in `--…--` and length-capped.
+ * @param cwd - the session's working directory.
+ * @returns the project directory basename.
+ */
+export declare function projectKey(cwd: string): string;
+/**
+ * The directory holding one stored session's log, derived exactly the way the
+ * JSONL persistence backend names it: `<root>/<projectKey(cwd)>/<encodeSegment(id)>`,
+ * with `root` defaulting to `$DSH_HOME/sessions` and `_no-cwd` standing in for a
+ * session without a working directory.
+ *
+ * `SessionPersistence.locate()` used to answer this, but 0.1.5-rc.1 removed it:
+ * the seam is handle-based and deliberately carries no consumer-facing path
+ * query (upstream note "Persistence export() and pre-release read-path trims" —
+ * all three of its consumers were only functional with compression disabled).
+ * The trash feature still needs the session DIRECTORY to move a log aside, so
+ * this mirrors the backend's naming instead. It is a pure function of
+ * (id, cwd); a change to the backend's layout needs this to follow.
+ * @param sessionId - the stored session's id.
+ * @param cwd - the session's working directory from its header, when it has one.
+ * @returns the absolute session directory.
+ */
+export declare function sessionLogDir(sessionId: string, cwd: string | undefined): string;
 export declare function apply(ctx: Context): Promise<() => Promise<void>>;
 export {};
 //# sourceMappingURL=index.d.ts.map

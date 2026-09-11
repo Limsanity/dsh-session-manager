@@ -10,8 +10,11 @@
  * the session's log directory in the system file manager.
  */
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SessionListState, SessionSummary, SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
-import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ISessions, SessionListState, SessionSummary } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { IWorkspaces, WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type { UiSession } from '@deepseek-ai/dsh-client-ui-session/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 // Type-only: brings the `settings.section` SlotMap declaration into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: brings the `sidebar.footer.action` SlotMap declaration into this program.
@@ -22,9 +25,13 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: merges the 'title' projection key the wire session summaries read.
 import type {} from '@deepseek-ai/dsh-session-title/client'
-// Type-only: brings the connection/remote merges and IApiClient types.
+// Type-only: brings the ctx.remote service merge (the Remote gateway client).
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
-import type { ConnectionHandle, HistoryEntry, SessionId as WireSessionId } from '@deepseek-ai/dsh-api-remotes/client'
+// Type-only: merges the 'sessions' / 'workspace' Remote namespaces into TypertClientRemote.
+import type {} from '@deepseek-ai/dsh-api-session-controller/remote'
+import type {} from '@deepseek-ai/dsh-api-workspace-controller/remote'
+import type { ClientRemote, ConnectionHandle, SessionId as WireSessionId } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SessionHistoryRecord } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { WorkspaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import { Button, IconTrashOutline16, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createElement, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react'
@@ -43,7 +50,7 @@ import {
 } from '../contract.ts'
 
 export const name = 'dsh-session-manager/client'
-export const inject = ['slots', 'locale', 'connection', 'sessions', 'workspaces']
+export const inject = ['slots', 'locale', 'remote', 'remote.session', 'remote.workspace', 'sessions', 'workspaces']
 
 /** Locale namespace id registered under ctx.locale. */
 export const NS = 'dsh-session-manager'
@@ -848,13 +855,13 @@ const STYLE = `
 
 interface SessionManagerProps {
   useSessions: SnapshotSelectorHook<SessionListState>
-  useWorkspaces: SnapshotSelectorHook<import('@deepseek-ai/dsh-client-runtime/client').WorkspaceListState>
+  useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>
   /** Wire client for the official session.history RPC (stats folding). */
-  api: Pick<import('@deepseek-ai/dsh-api-remotes/client').IApiClient, 'sessions'>
+  remote: Pick<ClientRemote, 'session'>
   /** Browser sessions service: open a session and close the settings panel. */
-  sessions: import('@deepseek-ai/dsh-client-runtime/client').ISessions
+  sessions: ISessions
   /** Workspaces service: durable workspace reordering (drag & drop). */
-  workspaceActions: import('@deepseek-ai/dsh-client-runtime/client').IWorkspaces
+  workspaceActions: IWorkspaces
   /** Close the settings panel (settings.section owner seat). */
   close: () => void
 }
@@ -880,7 +887,7 @@ interface SessionStats {
  * window; `startedAt`/`updatedAt` are the window's own bounds. Events the
  * fold does not recognize are skipped.
  */
-function foldStats(entries: readonly HistoryEntry[]): SessionStats {
+function foldStats(entries: readonly SessionHistoryRecord[]): SessionStats {
   let turns = 0
   let userMessages = 0
   let assistantMessages = 0
@@ -895,7 +902,9 @@ function foldStats(entries: readonly HistoryEntry[]): SessionStats {
     else if (type === 'user/message') userMessages += 1
     else if (type === 'assistant/message') assistantMessages += 1
     else if (type === 'tool/call') {
-      toolCounts.set(data.name, (toolCounts.get(data.name) ?? 0) + 1)
+      // The wire event payload is a lossless JSON union; only tool/call carries a name.
+      const name = (data as { name?: unknown } | null)?.name
+      if (typeof name === 'string') toolCounts.set(name, (toolCounts.get(name) ?? 0) + 1)
     }
   }
   const toolCalls = [...toolCounts.entries()]
@@ -1139,7 +1148,7 @@ function stringsOf() {
       }
 }
 
-function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceActions, close }: SessionManagerProps): ReactElement {
+function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspaceActions, close }: SessionManagerProps): ReactElement {
   const list = useSessions((state) => state)
   const workspaces = useWorkspaces((state) => state)
   const [removed, setRemoved] = useState<ReadonlySet<string>>(() => loadRemoved())
@@ -1642,16 +1651,20 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
     setStatsId(sessionId)
     setStats({ status: 'loading', data: null })
     try {
-      const response = await api.sessions.history({ sessionId: sessionId as WireSessionId })
-      if (!response.result.ok) {
+      const response = await remote.session.page({
+        address: { kind: 'session', sessionId: sessionId as WireSessionId },
+        // -1 is the Remote page contract's "current cursor" sentinel (tail page).
+        throughSeq: -1,
+      })
+      if (!response.ok) {
         setStats({ status: 'error', data: null })
         return
       }
-      setStats({ status: 'ready', data: foldStats(response.result.value.events) })
+      setStats({ status: 'ready', data: foldStats(response.value.records) })
     } catch {
       setStats({ status: 'error', data: null })
     }
-  }, [api, statsId])
+  }, [remote, statsId])
 
   const closeStats = useCallback((): void => {
     setStatsId(null)
@@ -1682,9 +1695,9 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
     setBusyId(sessionId)
     setNotice(null)
     try {
-      const response = await api.sessions.fork({ sessionId: sessionId as WireSessionId })
-      if (!response.result.ok) throw new Error(response.result.error?.code ?? 'fork-failed')
-      const childId = response.result.value.sessionId
+      const response = await remote.session.fork({ sessionId: sessionId as WireSessionId })
+      if (!response.ok) throw new Error(response.error?.code ?? 'fork-failed')
+      const childId = response.value.sessionId
       sessions.open(childId as SessionId)
       close()
     } catch (error) {
@@ -1695,7 +1708,7 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
     } finally {
       setBusyId(null)
     }
-  }, [api, sessions, close, strings, showNotice])
+  }, [remote, sessions, close, strings, showNotice])
 
   // Pause a running session: cancel its current turn through the host.
   const handlePause = useCallback(async (sessionId: string): Promise<void> => {
@@ -1822,7 +1835,9 @@ function SessionManager({ useSessions, useWorkspaces, api, sessions, workspaceAc
     const isRunning = session.running
     const busy = busyId === session.id
     const protectedReason = isCurrent ? strings.current : isRunning ? strings.running : ''
-    const metaParts = [session.cwd ?? strings.noCwd, session.agentPreset].filter((part): part is string => !!part)
+    // 0.1.5-rc.1 dropped agentPreset from the Session summary (session-row facts moved
+    // into the projection system; SessionListMetadata carries only blank/lastPromptAt).
+    const metaParts = [session.cwd ?? strings.noCwd].filter((part): part is string => !!part)
     if (isArchived) metaParts.push(strings.archived)
     if (protectedReason !== '' && !isCurrent) metaParts.push(protectedReason)
     const statsOpen = statsId === session.id
@@ -2085,7 +2100,11 @@ export function apply(ctx: ClientContext): void {
   document.head.append(style)
 
   // The wire client: official session.history RPC for stats folding.
-  const { api } = ctx.get('connection') as ConnectionHandle
+  // The Remote gateway client (0.1.5-rc.1 removed connection.api).
+  const remote = ctx.remote
+  // ui-session owns the root pending-interaction source (0.1.5-rc.1 moved it off the
+  // Session summary, so the drawer reads the observable instead of a row field).
+  const uiSession = ctx.get('uiSession') as UiSession
   // Resolve services at the ROOT context (apply time): the slot `inject:`
   // callbacks are evaluated inside the slot's own cordis scope, where these
   // services are not declared — accessing ctx.<service> there throws
@@ -2215,7 +2234,7 @@ export function apply(ctx: ClientContext): void {
       order: 60,
       label: () => t('nav'),
       locale: NS,
-      inject: () => ({ api, sessions, workspaceActions: workspaces }),
+      inject: () => ({ remote, sessions, workspaceActions: workspaces, uiSession }),
     }, SessionManager)
     return () => {
       disposeRegistration()
@@ -2224,10 +2243,13 @@ export function apply(ctx: ClientContext): void {
   })
 
   // The conversation header's right-aligned utilities row (official slot that
-  // also hosts the Session log button). Order, left to right:
-  //   对话管理 (-40 host) → 对话管理按钮 (-30) → 删除本对话 (-10) → Session log (0)
+  // also hosts the core's "open in app" and Session log buttons). Ascending
+  // `order` renders left to right. Our two buttons sit at -30 / -29 so they stay
+  // adjacent and to the left of the core `open-in-app` button (order -10):
+  //   对话管理 (-40 host) → 对话管理按钮 (-30) → 删除本对话 (-29) → open-in-app (-10) → Session log (0)
+  // Reusing -10 here would collide with `open-in-app` and split the pair.
   ctx.slots.inject('conversation.session.header.utilities', () => {
-    const common = () => ({ api, sessions })
+    const common = () => ({ remote, sessions, workspaceActions: workspaces, uiSession })
     const disposers = [
       ctx.slots.register({
         name: 'conversation.session.header.utilities',
@@ -2246,7 +2268,7 @@ export function apply(ctx: ClientContext): void {
       ctx.slots.register({
         name: 'conversation.session.header.utilities',
         id: 'dsh-delete-session',
-        order: -10,
+        order: -29,
         locale: NS,
         inject: () => ({}),
       }, DeleteCurrentButton),
@@ -2259,10 +2281,12 @@ export function apply(ctx: ClientContext): void {
 
 interface ClientContext {
   slots: SlotRegistry
+    /** Remote gateway client (0.1.5-rc.1 replaced the removed connection.api). */
+    remote: ClientRemote
   get<T>(service: string): T
   effect(effect: () => void | (() => void), label?: string): void
-  sessions: import('@deepseek-ai/dsh-client-runtime/client').ISessions
-  workspaces: import('@deepseek-ai/dsh-client-runtime/client').IWorkspaces
+  sessions: ISessions
+  workspaces: IWorkspaces
   locale: {
     getLocale(): { active: string }
     subscribe(listener: () => void): () => void
@@ -2502,8 +2526,12 @@ function useDrawerState(): DrawerState {
 
 /** Injected share for the header buttons and drawer host. */
 interface DrawerInjected {
-  api: Pick<import('@deepseek-ai/dsh-api-remotes/client').IApiClient, 'sessions' | 'workspace'>
-  sessions: import('@deepseek-ai/dsh-client-runtime/client').ISessions
+  remote: Pick<ClientRemote, 'session'>
+  sessions: ISessions
+  /** Workspaces service: list snapshot + durable mutations. */
+  workspaceActions: IWorkspaces
+  /** ui-session service: the root source of pending UI interactions. */
+  uiSession: UiSession
 }
 
 /** "对话管理" header button: open the drawer on the main list. */
@@ -2526,11 +2554,11 @@ function HeaderManageButton(_props: DrawerInjected): ReactElement {
  * (`session.list` / `workspace.list`) because session-scope slots do not
  * receive the `useSessions`/`useWorkspaces` hooks.
  */
-function SessionDrawerHost({ api, sessions }: DrawerInjected): ReactElement | null {
+function SessionDrawerHost({ remote, sessions, workspaceActions, uiSession }: DrawerInjected): ReactElement | null {
   const state = useDrawerState()
   if (!state.open) return null
   return createPortal(
-    createElement(SessionDrawer, { api, sessions }),
+    createElement(SessionDrawer, { remote, sessions, workspaceActions, uiSession }),
     document.body,
   )
 }
@@ -2551,7 +2579,7 @@ interface DrawerRow {
 }
 
 /** The right drawer: full session management (list, archived, trash). */
-function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
+function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: DrawerInjected): ReactElement {
   const state = useDrawerState()
   const strings = useLocaleStrings()
   // Subscribe to the official session store (same source the sidebar uses):
@@ -2583,6 +2611,13 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
 
   // Rows derive from the official useSessions store (same source as the
   // sidebar): live running/pendingInteraction/completed stay in sync.
+  // 0.1.5-rc.1 moved pending interactions off the Session summary onto ui-session's
+  // root observable, so the amber dot reads that source per row.
+  const pendingBySession = useSyncExternalStore(
+    (listener) => uiSession.pendingInteractions.subscribe(listener),
+    () => uiSession.pendingInteractions.getSnapshot(),
+  )
+
   const rows: DrawerRow[] | null = list.phase === 'ready'
     ? list.ids
       .map((id) => list.byId[id])
@@ -2595,7 +2630,7 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
         running: summary.running,
         blank: summary.blank,
         archived: archivedSet.has(summary.id),
-        pendingInteraction: summary.pendingInteraction,
+        pendingInteraction: pendingBySession.get(summary.id),
         completed: summary.completed,
       }))
     : null
@@ -2615,16 +2650,12 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
   const load = useCallback(async (): Promise<void> => {
     try {
       const [workspacesRes, trashRes] = await Promise.all([
-        api.workspace.list({}),
+        Promise.resolve(workspaceActions.list.getSnapshot()),
         fetch(TRASH_ROUTE),
       ])
-      if (workspacesRes.result.ok) {
-        setArchivedSet(new Set(workspacesRes.result.value.archivedSessionIds))
-        setWorkspaces(workspacesRes.result.value.items)
-        setLoadError(false)
-      } else {
-        setLoadError(true)
-      }
+      setArchivedSet(new Set(workspacesRes.archivedSessionIds))
+      setWorkspaces([...workspacesRes.items])
+      setLoadError(false)
       const trashData = (await trashRes.json().catch(() => ({}))) as TrashListResponse
       if (trashRes.ok && trashData.ok) {
         setTrash(trashData.entries)
@@ -2636,7 +2667,7 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
     } catch {
       setLoadError(true)
     }
-  }, [api])
+  }, [workspaceActions])
 
   useEffect(() => {
     void load()
@@ -2783,16 +2814,20 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
     setStatsId(sessionId)
     setStats({ status: 'loading', data: null })
     try {
-      const response = await api.sessions.history({ sessionId: sessionId as WireSessionId })
-      if (!response.result.ok) {
+      const response = await remote.session.page({
+        address: { kind: 'session', sessionId: sessionId as WireSessionId },
+        // -1 is the Remote page contract's "current cursor" sentinel (tail page).
+        throughSeq: -1,
+      })
+      if (!response.ok) {
         setStats({ status: 'error', data: null })
         return
       }
-      setStats({ status: 'ready', data: foldStats(response.result.value.events) })
+      setStats({ status: 'ready', data: foldStats(response.value.records) })
     } catch {
       setStats({ status: 'error', data: null })
     }
-  }, [api, statsId])
+  }, [remote, statsId])
 
   const closeStats = useCallback((): void => {
     setStatsId(null)
@@ -2826,9 +2861,9 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
   const handleFork = useCallback(async (sessionId: string): Promise<void> => {
     setBusyId(sessionId)
     try {
-      const response = await api.sessions.fork({ sessionId: sessionId as WireSessionId })
-      if (!response.result.ok) throw new Error(response.result.error?.code ?? 'fork-failed')
-      const childId = response.result.value.sessionId
+      const response = await remote.session.fork({ sessionId: sessionId as WireSessionId })
+      if (!response.ok) throw new Error(response.error?.code ?? 'fork-failed')
+      const childId = response.value.sessionId
       sessions.open(childId as SessionId)
       setDrawer({ open: false })
     } catch (error) {
@@ -2839,7 +2874,7 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
     } finally {
       setBusyId(null)
     }
-  }, [api, sessions, strings, showAlert])
+  }, [remote, sessions, strings, showAlert])
 
   const renderStatsDialog = (): ReactElement | null => {
     if (statsId === null || stats === null) return null
@@ -3106,15 +3141,12 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
         beforeWorkspaceId = slot.slice(7)
       }
       // '__end__' leaves beforeWorkspaceId undefined → appended to the very end.
-      await api.workspace.insertBefore({
-        workspaceId: dragged as never,
-        beforeWorkspaceId: beforeWorkspaceId as never,
-      })
+      await workspaceActions.insertBefore(dragged as never, beforeWorkspaceId as never)
       await load()
     } catch {
       // Reordering is best-effort; the next poll re-baselines the list.
     }
-  }, [api, load, dragWorkspaceId])
+  }, [workspaceActions, load, dragWorkspaceId])
 
   // Move a workspace to the top of the group list.
   const moveWorkspaceToTop = useCallback(async (workspaceId: string): Promise<void> => {
@@ -3122,15 +3154,12 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
     const firstId = order.find((id) => id !== '__ungrouped__')
     if (firstId === undefined || firstId === workspaceId) return
     try {
-      await api.workspace.insertBefore({
-        workspaceId: workspaceId as never,
-        beforeWorkspaceId: firstId as never,
-      })
+      await workspaceActions.insertBefore(workspaceId as never, firstId as never)
       await load()
     } catch {
       // Best-effort; the next poll re-baselines the list.
     }
-  }, [api, load])
+  }, [workspaceActions, load])
 
   // Rename a workspace through a prompt dialog.
   const renameWorkspace = useCallback(async (group: { workspaceId: string; title: string }): Promise<void> => {
@@ -3139,29 +3168,24 @@ function SessionDrawer({ api, sessions }: DrawerInjected): ReactElement {
     const title = input.trim()
     if (title === '' || title === group.title) return
     try {
-      await api.workspace.rename({
-        workspaceId: group.workspaceId as never,
-        title: title as never,
-      })
+      await workspaceActions.rename(group.workspaceId as never, title as never)
       await load()
     } catch {
       // Best-effort; the next poll re-baselines the list.
     }
-  }, [api, load])
+  }, [workspaceActions, load])
 
   // Delete a workspace after a confirmation dialog; its sessions fall back
   // to the ungrouped bucket.
   const deleteWorkspace = useCallback(async (group: { workspaceId: string; title: string }): Promise<void> => {
     if (!window.confirm(strings.workspaceDeleteConfirm.replace('{title}', group.title))) return
     try {
-      await api.workspace.delete({
-        workspaceId: group.workspaceId as never,
-      })
+      await workspaceActions.delete(group.workspaceId as never)
       await load()
     } catch {
       // Best-effort; the next poll re-baselines the list.
     }
-  }, [api, load])
+  }, [workspaceActions, load])
 
   const renderWorkspaceLabel = (
     group: { workspaceId: string; title: string; rows: DrawerRow[] },
