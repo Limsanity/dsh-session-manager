@@ -33,7 +33,7 @@ import type {} from '@deepseek-ai/dsh-api-workspace-controller/remote'
 import type { ClientRemote, ConnectionHandle, SessionId as WireSessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionHistoryRecord } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { WorkspaceView } from '@deepseek-ai/dsh-api-remotes/client'
-import { Button, IconTrashOutline16, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconTrashOutlineRegular, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createElement, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -1950,7 +1950,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
         className: 'dsh-row-action dsh-row-action--danger',
         variant: 'outline',
         size: 'sm',
-        icon: createElement(IconTrashOutline16, { size: 16 }),
+        icon: createElement(IconTrashOutlineRegular, { size: 16 }),
         disabled: isRunning || busy,
         title: protectedReason !== '' && !isCurrent ? protectedReason : strings.delete,
         onClick: () => void handleDelete(session.id, session.displayTitle),
@@ -1987,7 +1987,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
         className: 'dsh-row-action dsh-row-action--danger',
         variant: 'outline',
         size: 'sm',
-        icon: createElement(IconTrashOutline16, { size: 16 }),
+        icon: createElement(IconTrashOutlineRegular, { size: 16 }),
         disabled: busy,
         onClick: () => void handlePurge(entry.sessionId, title),
         children: strings.purge,
@@ -2024,7 +2024,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
         className: 'dsh-row-action dsh-row-action--danger',
         variant: 'outline',
         size: 'sm',
-        icon: createElement(IconTrashOutline16, { size: 16 }),
+        icon: createElement(IconTrashOutlineRegular, { size: 16 }),
         disabled: selectedIds.size === 0,
         title: strings.batchDelete,
         onClick: () => void handleBatchDelete(),
@@ -3059,7 +3059,7 @@ function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: Drawer
       createElement(Button, {
         className: 'dsh-row-action dsh-row-action--danger',
         variant: 'outline', size: 'sm',
-        icon: createElement(IconTrashOutline16, { size: 16 }),
+        icon: createElement(IconTrashOutlineRegular, { size: 16 }),
         disabled: row.running || busy,
         title: row.running ? strings.running : strings.delete,
         onClick: () => void handleDelete(row.sessionId, row.title),
@@ -3092,7 +3092,7 @@ function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: Drawer
       createElement(Button, {
         className: 'dsh-row-action dsh-row-action--danger',
         variant: 'outline', size: 'sm',
-        icon: createElement(IconTrashOutline16, { size: 16 }),
+        icon: createElement(IconTrashOutlineRegular, { size: 16 }),
         disabled: busy,
         onClick: () => void handlePurge(entry.sessionId, title), children: strings.purge,
       }),

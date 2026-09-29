@@ -35,7 +35,7 @@ import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 // Type-only: brings the ctx.agentPresets service merge into this program.
-import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 // Type-only: brings the ctx.loader merge into this program.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
