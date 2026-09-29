@@ -14,6 +14,7 @@ import type { ISessions, SessionListState, SessionSummary } from '@deepseek-ai/d
 import type { IWorkspaces, WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { UiSession } from '@deepseek-ai/dsh-client-ui-session/client'
+import type { UiWorkspace } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 // Type-only: brings the `settings.section` SlotMap declaration into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -50,7 +51,7 @@ import {
 } from '../contract.ts'
 
 export const name = 'dsh-session-manager/client'
-export const inject = ['slots', 'locale', 'remote', 'remote.session', 'remote.workspace', 'sessions', 'workspaces']
+export const inject = ['slots', 'locale', 'remote', 'remote.session', 'remote.workspace', 'sessions', 'workspaces', 'uiWorkspace']
 
 /** Locale namespace id registered under ctx.locale. */
 export const NS = 'dsh-session-manager'
@@ -853,13 +854,31 @@ const STYLE = `
 }
 `
 
+/**
+ * The Session the main view currently retains — DSH 0.2.0's replacement for the
+ * removed `SessionListState.current`.
+ *
+ * 0.1.5 kept the selection in the list state; 0.2.0 moved navigation to the view
+ * owners and exposes the same fact through each row's local retention counts.
+ * The official workspace derivation reads it identically:
+ *   `Object.values(list.byId).find((row) => (row.retainedBy.mainView ?? 0) > 0)`
+ */
+function currentSessionId(list: SessionListState): string | undefined {
+  for (const summary of Object.values(list.byId)) {
+    if ((summary.retainedBy?.mainView ?? 0) > 0) return summary.id
+  }
+  return undefined
+}
+
 interface SessionManagerProps {
   useSessions: SnapshotSelectorHook<SessionListState>
   useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>
   /** Wire client for the official session.history RPC (stats folding). */
   remote: Pick<ClientRemote, 'session'>
-  /** Browser sessions service: open a session and close the settings panel. */
+  /** Browser sessions service: the row/status source (open moved to uiWorkspace). */
   sessions: ISessions
+  /** Navigation service: selecting a Session is a view-owner action in 0.2.0. */
+  uiWorkspace: UiWorkspace
   /** Workspaces service: durable workspace reordering (drag & drop). */
   workspaceActions: IWorkspaces
   /** Close the settings panel (settings.section owner seat). */
@@ -1148,8 +1167,10 @@ function stringsOf() {
       }
 }
 
-function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspaceActions, close }: SessionManagerProps): ReactElement {
+function SessionManager({ useSessions, useWorkspaces, remote, sessions, uiWorkspace, workspaceActions, close }: SessionManagerProps): ReactElement {
   const list = useSessions((state) => state)
+  // 0.2.0 dropped `SessionListState.current`; the selection now rides row retention.
+  const currentId = currentSessionId(list)
   const workspaces = useWorkspaces((state) => state)
   const [removed, setRemoved] = useState<ReadonlySet<string>>(() => loadRemoved())
   const [archivedOpen, setArchivedOpen] = useState(false)
@@ -1296,7 +1317,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
     index: number,
   ): ReactElement => {
     const draggable = group.workspaceId !== '__ungrouped__'
-    const workspaceSelectable = group.rows.filter((session) => !session.running && session.id !== list.current)
+    const workspaceSelectable = group.rows.filter((session) => !session.running && session.id !== currentId)
     const workspaceAllSelected = workspaceSelectable.length > 0 && workspaceSelectable.every((session) => selectedIds.has(session.id))
     const workspaceSomeSelected = workspaceSelectable.some((session) => selectedIds.has(session.id))
     return createElement('div', {
@@ -1527,7 +1548,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
   const toggleSelectAll = useCallback((): void => {
     setSelectedIds((previous) => {
       const next = new Set(previous)
-      const selectable = activeRows.filter((session) => !session.running && session.id !== list.current)
+      const selectable = activeRows.filter((session) => !session.running && session.id !== currentId)
       const allSelected = selectable.length > 0 && selectable.every((session) => next.has(session.id))
       for (const session of selectable) {
         if (allSelected) next.delete(session.id)
@@ -1535,12 +1556,12 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
       }
       return next
     })
-  }, [activeRows, list.current])
+  }, [activeRows, currentId])
 
   const toggleSelectWorkspace = useCallback((group: { workspaceId: string; rows: SessionSummary[] }): void => {
     setSelectedIds((previous) => {
       const next = new Set(previous)
-      const selectable = group.rows.filter((session) => !session.running && session.id !== list.current)
+      const selectable = group.rows.filter((session) => !session.running && session.id !== currentId)
       const allSelected = selectable.length > 0 && selectable.every((session) => next.has(session.id))
       for (const session of selectable) {
         if (allSelected) next.delete(session.id)
@@ -1548,7 +1569,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
       }
       return next
     })
-  }, [list.current])
+  }, [currentId])
 
   const handleBatchDelete = useCallback(async (): Promise<void> => {
     const ids = [...selectedIds]
@@ -1685,7 +1706,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
   // conversation.
   const handleContinue = useCallback((sessionId: string): void => {
     markRead(sessionId)
-    sessions.open(sessionId as SessionId)
+    uiWorkspace.openSession(sessionId as SessionId)
     close()
   }, [sessions, close])
 
@@ -1698,7 +1719,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
       const response = await remote.session.fork({ sessionId: sessionId as WireSessionId })
       if (!response.ok) throw new Error(response.error?.code ?? 'fork-failed')
       const childId = response.value.sessionId
-      sessions.open(childId as SessionId)
+      uiWorkspace.openSession(childId as SessionId)
       close()
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
@@ -1831,7 +1852,7 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
   }
 
   const renderRow = (session: SessionSummary, isArchived: boolean): ReactElement => {
-    const isCurrent = !isArchived && session.id === list.current
+    const isCurrent = !isArchived && session.id === currentId
     const isRunning = session.running
     const busy = busyId === session.id
     const protectedReason = isCurrent ? strings.current : isRunning ? strings.running : ''
@@ -1868,24 +1889,14 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
               dotStatus !== null ? strings.read : strings.unread,
               () => {
                 if (dotStatus === 'amber' || dotStatus === 'green') {
-                  // Dismiss the OFFICIAL dot in place (no navigation): delete
-                  // the manager's private marker and refresh the shared list
-                  // store, so the sidebar dot disappears on both surfaces.
-                  try {
-                    const manager = (sessions as unknown as {
-                      manager?: {
-                        completedNotifications?: Set<string>
-                        pendingInteractions?: Map<string, unknown>
-                        notifier?: { markDirty(): void }
-                      }
-                    }).manager
-                    const changed = dotStatus === 'green'
-                      ? (manager?.completedNotifications?.delete(session.id) ?? false)
-                      : (manager?.pendingInteractions?.delete(session.id) ?? false)
-                    if (changed) manager?.notifier?.markDirty()
-                  } catch {
-                    // Best-effort; the next list refresh re-baselines.
-                  }
+                  // 🔴 0.2.0 has no API to dismiss the OFFICIAL dot in place.
+                  // The controller's private `completedNotifications` /
+                  // `pendingInteractions` markers this used to delete are gone
+                  // (`SessionStatus` replaced them), and `completionUnread`
+                  // clears only when the Session is opened. So the plugin's own
+                  // unread marker is cleared here while the official sidebar dot
+                  // stays until the user opens the Session — a deliberate
+                  // behaviour change, not an oversight.
                   setUnread(session.id, false)
                 } else {
                   setUnread(session.id, dotStatus === null)
@@ -2012,8 +2023,8 @@ function SessionManager({ useSessions, useWorkspaces, remote, sessions, workspac
       createElement('label', { className: 'dsh-delete-session__batch-select-all' },
         createElement('input', {
           type: 'checkbox',
-          checked: activeRows.some((session) => !session.running && session.id !== list.current)
-            && activeRows.every((session) => session.running || session.id === list.current || selectedIds.has(session.id)),
+          checked: activeRows.some((session) => !session.running && session.id !== currentId)
+            && activeRows.every((session) => session.running || session.id === currentId || selectedIds.has(session.id)),
           onChange: () => toggleSelectAll(),
           'aria-label': strings.selectAll,
         }),
@@ -2112,6 +2123,9 @@ export function apply(ctx: ClientContext): void {
   // ctx.effect callback (those run synchronously) to avoid TDZ crashes.
   const sessions = ctx.sessions
   const workspaces = ctx.workspaces
+  // 0.2.0 removed ISessions.open: selecting a Session is a view-owner navigation
+  // action, exposed by the workspace UI service.
+  const uiWorkspace = ctx.uiWorkspace
 
   const syncLocale = (): void => {
     setAppLocale(ctx.locale.getLocale().active)
@@ -2130,7 +2144,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     let previous: string | undefined
     const check = (): void => {
-      const current = sessions.list.getSnapshot().current
+      const current = currentSessionId(sessions.list.getSnapshot())
       if (current !== undefined && current !== previous && unreadState.ids.has(current)) {
         markRead(current)
       }
@@ -2234,7 +2248,7 @@ export function apply(ctx: ClientContext): void {
       order: 60,
       label: () => t('nav'),
       locale: NS,
-      inject: () => ({ remote, sessions, workspaceActions: workspaces, uiSession }),
+      inject: () => ({ remote, sessions, uiWorkspace, workspaceActions: workspaces, uiSession }),
     }, SessionManager)
     return () => {
       disposeRegistration()
@@ -2249,7 +2263,7 @@ export function apply(ctx: ClientContext): void {
   //   对话管理 (-40 host) → 对话管理按钮 (-30) → 删除本对话 (-29) → open-in-app (-10) → Session log (0)
   // Reusing -10 here would collide with `open-in-app` and split the pair.
   ctx.slots.inject('conversation.session.header.utilities', () => {
-    const common = () => ({ remote, sessions, workspaceActions: workspaces, uiSession })
+    const common = () => ({ remote, sessions, uiWorkspace, workspaceActions: workspaces, uiSession })
     const disposers = [
       ctx.slots.register({
         name: 'conversation.session.header.utilities',
@@ -2287,6 +2301,8 @@ interface ClientContext {
   effect(effect: () => void | (() => void), label?: string): void
   sessions: ISessions
   workspaces: IWorkspaces
+  /** 0.2.0 moved "open this Session" here (ISessions.open was removed). */
+  uiWorkspace: UiWorkspace
   locale: {
     getLocale(): { active: string }
     subscribe(listener: () => void): () => void
@@ -2528,6 +2544,8 @@ function useDrawerState(): DrawerState {
 interface DrawerInjected {
   remote: Pick<ClientRemote, 'session'>
   sessions: ISessions
+  /** Navigation service: 0.2.0 moved "open this Session" off ISessions. */
+  uiWorkspace: UiWorkspace
   /** Workspaces service: list snapshot + durable mutations. */
   workspaceActions: IWorkspaces
   /** ui-session service: the root source of pending UI interactions. */
@@ -2554,11 +2572,11 @@ function HeaderManageButton(_props: DrawerInjected): ReactElement {
  * (`session.list` / `workspace.list`) because session-scope slots do not
  * receive the `useSessions`/`useWorkspaces` hooks.
  */
-function SessionDrawerHost({ remote, sessions, workspaceActions, uiSession }: DrawerInjected): ReactElement | null {
+function SessionDrawerHost({ remote, sessions, uiWorkspace, workspaceActions, uiSession }: DrawerInjected): ReactElement | null {
   const state = useDrawerState()
   if (!state.open) return null
   return createPortal(
-    createElement(SessionDrawer, { remote, sessions, workspaceActions, uiSession }),
+    createElement(SessionDrawer, { remote, sessions, uiWorkspace, workspaceActions, uiSession }),
     document.body,
   )
 }
@@ -2579,7 +2597,7 @@ interface DrawerRow {
 }
 
 /** The right drawer: full session management (list, archived, trash). */
-function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: DrawerInjected): ReactElement {
+function SessionDrawer({ remote, sessions, uiWorkspace, workspaceActions, uiSession }: DrawerInjected): ReactElement {
   const state = useDrawerState()
   const strings = useLocaleStrings()
   // Subscribe to the official session store (same source the sidebar uses):
@@ -2613,9 +2631,11 @@ function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: Drawer
   // sidebar): live running/pendingInteraction/completed stay in sync.
   // 0.1.5-rc.1 moved pending interactions off the Session summary onto ui-session's
   // root observable, so the amber dot reads that source per row.
-  const pendingBySession = useSyncExternalStore(
-    (listener) => uiSession.pendingInteractions.subscribe(listener),
-    () => uiSession.pendingInteractions.getSnapshot(),
+  // 0.2.0 merged running / pending-interaction / completion-reminder into one
+  // per-Session status map (0.1.5 exposed `pendingInteractions` alone).
+  const statusBySession = useSyncExternalStore(
+    (listener) => uiSession.sessionStatus.subscribe(listener),
+    () => uiSession.sessionStatus.getSnapshot(),
   )
 
   const rows: DrawerRow[] | null = list.phase === 'ready'
@@ -2630,8 +2650,8 @@ function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: Drawer
         running: summary.running,
         blank: summary.blank,
         archived: archivedSet.has(summary.id),
-        pendingInteraction: pendingBySession.get(summary.id),
-        completed: summary.completed,
+        pendingInteraction: statusBySession.get(summary.id)?.pendingInteraction,
+        completed: statusBySession.get(summary.id)?.completionUnread ?? false,
       }))
     : null
 
@@ -2852,7 +2872,7 @@ function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: Drawer
 
   const handleContinue = useCallback((sessionId: string): void => {
     markRead(sessionId)
-    sessions.open(sessionId as SessionId)
+    uiWorkspace.openSession(sessionId as SessionId)
     setDrawer({ open: false })
   }, [sessions])
 
@@ -2864,7 +2884,7 @@ function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: Drawer
       const response = await remote.session.fork({ sessionId: sessionId as WireSessionId })
       if (!response.ok) throw new Error(response.error?.code ?? 'fork-failed')
       const childId = response.value.sessionId
-      sessions.open(childId as SessionId)
+      uiWorkspace.openSession(childId as SessionId)
       setDrawer({ open: false })
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
@@ -2972,24 +2992,14 @@ function SessionDrawer({ remote, sessions, workspaceActions, uiSession }: Drawer
               dotStatus !== null ? strings.read : strings.unread,
               () => {
                 if (dotStatus === 'amber' || dotStatus === 'green') {
-                  // Dismiss the OFFICIAL dot in place (no navigation): delete
-                  // the manager's private marker and refresh the shared list
-                  // store, so the sidebar dot disappears on both surfaces.
-                  try {
-                    const manager = (sessions as unknown as {
-                      manager?: {
-                        completedNotifications?: Set<string>
-                        pendingInteractions?: Map<string, unknown>
-                        notifier?: { markDirty(): void }
-                      }
-                    }).manager
-                    const changed = dotStatus === 'green'
-                      ? (manager?.completedNotifications?.delete(row.sessionId) ?? false)
-                      : (manager?.pendingInteractions?.delete(row.sessionId) ?? false)
-                    if (changed) manager?.notifier?.markDirty()
-                  } catch {
-                    // Best-effort; the next list refresh re-baselines.
-                  }
+                  // 🔴 0.2.0 has no API to dismiss the OFFICIAL dot in place.
+                  // The controller's private `completedNotifications` /
+                  // `pendingInteractions` markers this used to delete are gone
+                  // (`SessionStatus` replaced them), and `completionUnread`
+                  // clears only when the Session is opened. So the plugin's own
+                  // unread marker is cleared here while the official sidebar dot
+                  // stays until the user opens the Session — a deliberate
+                  // behaviour change, not an oversight.
                   setUnread(row.sessionId, false)
                 } else {
                   setUnread(row.sessionId, dotStatus === null)
