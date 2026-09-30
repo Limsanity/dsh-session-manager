@@ -1,6 +1,7 @@
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client';
 import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client';
 import type { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client';
+import type { UiWorkspace } from '@deepseek-ai/dsh-client-ui-workspace/client';
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client';
 export declare const name = "dsh-session-manager/client";
 export declare const inject: string[];
@@ -21,6 +22,8 @@ interface ClientContext {
     effect(effect: () => void | (() => void), label?: string): void;
     sessions: ISessions;
     workspaces: IWorkspaces;
+    /** 0.2.0 moved "open this Session" here (ISessions.open was removed). */
+    uiWorkspace: UiWorkspace;
     locale: {
         getLocale(): {
             active: string;
